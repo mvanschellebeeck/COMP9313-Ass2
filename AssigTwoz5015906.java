@@ -6,23 +6,26 @@ import scala.Serializable;
 import scala.Tuple2;
 import java.util.HashMap;
 import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 import org.apache.log4j.Logger;
 import org.apache.log4j.Level;
 
 public class AssigTwoz5015906 {
 
-    final static Logger logger1 = Logger.getLogger("org");
-    final static Logger logger2 = Logger.getLogger("akka");
-    final static String INPUT_FILE = "graph.txt";
-    final static String BAR_SEPARATOR = "|";
-    final static String BAR_SEAPRATOR_SPLIT = "\\" + BAR_SEPARATOR;
-    final static String NODE_WEIGHT_SEPARATOR = ":";
-    final static String NO_PATH="XX";
+    private final static Logger logger1 = Logger.getLogger("org");
+    private final static Logger logger2 = Logger.getLogger("akka");
+    private final static String INPUT_FILE = "graph.txt";
+    private final static String BAR_SEPARATOR = "|";
+    private final static String BAR_SEAPRATOR_SPLIT = "\\" + BAR_SEPARATOR;
+    private final static String NODE_WEIGHT_SEPARATOR = ":";
+    private final static String NO_PATH="XX";
+
+    // enum for index of lists?
 
     public static class Node implements Serializable {
         String nodeId;
-        Integer distanceToSource;
+        Integer distanceFromSource;
         ArrayList<String> adjacencyList;
         String bestPathToNode;
 
@@ -40,24 +43,35 @@ public class AssigTwoz5015906 {
            return result;
         }
 
-        public Node(String line) {
+        Node(String nodeId, Integer distanceFromSource,
+             ArrayList<Tuple2<String, Integer>> adjacencyList, String path) {
+            this.nodeId = nodeId;
+            this.distanceFromSource = distanceFromSource;
+            this.adjacencyList = new ArrayList<>();
+            this.bestPathToNode = path;
+        }
+
+        Node(String line) {
             String[] tokens = line.split(BAR_SEAPRATOR_SPLIT);
             nodeId = tokens[0];
-            distanceToSource = Integer.parseInt(tokens[1]);
+            distanceFromSource = Integer.parseInt(tokens[1]);
             adjacencyList = parseAdjacencyList(tokens[2]);
             bestPathToNode = tokens[3];
         }
 
-        public String getNodeId() {
+        String getNodeId() {
             return nodeId;
         }
 
-        public Integer getDistanceToSource() {
-            return distanceToSource;
+        Integer getDistanceFromSource() {
+            return distanceFromSource;
         }
 
-        public ArrayList<String> getAdjacencyList() {
-            return adjacencyList;
+        ArrayList<Tuple2<String, Integer>> getAdjacencyList() {
+            return (ArrayList<Tuple2<String, Integer>>) adjacencyList.stream().map(s -> {
+               String[] tokens = s.split(":") ;
+               return new Tuple2<>(tokens[0], Integer.parseInt(tokens[1]));
+            }).collect(Collectors.toList());
         }
 
         public String getBestPathToNode() {
@@ -68,13 +82,13 @@ public class AssigTwoz5015906 {
         public String toString() {
             return String.join("|",
                     nodeId,
-                    distanceToSource.toString(),
+                    distanceFromSource.toString(),
                     adjacencyList.toString().replaceAll("\\s", ""),
-                    NO_PATH);
+                    bestPathToNode);
         }
     }
 
-    public static JavaRDD<String> formatInput(JavaRDD<String> input, String startNode) {
+    private static JavaRDD<String> formatInput(JavaRDD<String> input, String startNode) {
         // change to
         // Node   DistanceToSource Neighbours           Path
         // NO     0                [(N1,4),(N2,3)]      ""
@@ -130,69 +144,48 @@ public class AssigTwoz5015906 {
             System.out.println("Previous iteration:");
             prevGraph.collect().forEach(System.out::println);
 
+            // mapper
+            JavaPairRDD<String, Node> mapper =
+                    prevGraph
+                    // only work with nodes that have a distance (temporarily)
+                    .filter(v -> Integer.parseInt(v.split(BAR_SEAPRATOR_SPLIT)[1]) >= 0)
+                    .flatMapToPair(line-> {
+                        ArrayList<Tuple2<String, Node>> result = new ArrayList<>();
+                        Node node = new Node(line);
+                        result.add(new Tuple2<>(node.getNodeId(), node));
+                        Integer distance = node.getDistanceFromSource();
+                        for(Tuple2<String, Integer> neighbour : node.getAdjacencyList()) {
+                            result.add(new Tuple2<>(neighbour._1,
+                                    new Node(neighbour._1, distance + neighbour._2, new ArrayList<>(),
+                                            node.getNodeId())));
+                        }
+                        return result.iterator();
+                    });
 
-            prevGraph.mapToPair(line-> {
-                Node node = new Node(line);
-                return new Tuple2<>(node.getNodeId(), node);
+            mapper.reduceByKey((node, node2) ->{
+                ArrayList<Tuple2<String, Integer>> neighbours = node.getAdjacencyList().isEmpty() ?
+                        node2.getAdjacencyList() : node.getAdjacencyList();
+
+                Integer nodeDistance = node.getDistanceFromSource();
+                Integer node2Distance = node2.distanceFromSource;
+                String path;
+                Integer minDistance;
+                if (nodeDistance < node2Distance) {
+                   minDistance = nodeDistance;
+                   path = node.getBestPathToNode();
+                } else {
+                   minDistance = node2Distance;
+                   path = node2.getBestPathToNode();
+                }
+
+                return new Node(node.getNodeId(), minDistance, neighbours, path);
             }).collect().forEach(System.out::println);
 
+
             break;
+
         }
 
-
-        // mapper
-
-
-
-//        while (visited.size() != 6) {
-//
-//
-//            if (!start)  {
-//                JavaRDD<String> myInput = sc.textFile("wasup");
-//                JavaPairRDD<String, Tuple3<String, Integer, String>> abc = myInput.mapToPair(
-//                        line -> {
-//                           String []  parts = line.split(",");
-//                           String node = parts[0];
-//                           String status = parts[1];
-//                           Integer dist = Integer.parseInt(parts[2]);
-//                           String path = parts[3];
-//
-//                           return new Tuple2<String, Tuple3<String, Integer, String>>(
-//                               node,
-//                               new Tuple3(status, dist, path)
-//                           );
-//                        }
-//                );
-//
-//                break;
-//            }
-//
-//            parsed.collect().forEach(System.out::println);
-
-            // mapper
-//            JavaPairRDD<String, Tuple3<String, Integer, String>> adjacentNodes = parsed.flatMapToPair(pair -> {
-//
-//                NodeAndNeighbours nodeAndNeighbours = new NodeAndNeighbours(pair._1, pair._2);
-//                Iterable<Tuple2<String, Integer>> nodes = nodeAndNeighbours.getNeighbours();
-//
-//                ArrayList<Tuple2<String, Tuple3<String, Integer, String>>> ret = new ArrayList<>();
-//
-//                nodes.forEach(node -> {
-//                    String nodeName = node._1;
-//                    if (nodeName.equals(startNode))
-//                        ret.add(new Tuple2<String, Tuple3<String, Integer, String>>(
-//                                nodeName,
-//                                new Tuple3<>("Y", 0, "path")));
-//                    else
-//                        ret.add(new Tuple2<String, Tuple3<String, Integer, String>>(
-//                                nodeName,
-//                                new Tuple3<>("N", -1, "path")));
-//                });
-//
-//                return ret.iterator();
-//            });
-//
-//
 //            // reducer
 //           adjacentNodes
 //                   .reduceByKey( (best, curr) -> curr._2() < best._2() ? curr : best)
