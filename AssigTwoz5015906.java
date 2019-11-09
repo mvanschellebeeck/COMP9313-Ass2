@@ -7,7 +7,6 @@ import scala.Tuple2;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.stream.Collectors;
-
 import org.apache.log4j.Logger;
 import org.apache.log4j.Level;
 
@@ -15,11 +14,10 @@ public class AssigTwoz5015906 {
 
     private final static Logger logger1 = Logger.getLogger("org");
     private final static Logger logger2 = Logger.getLogger("akka");
-    private final static String INPUT_FILE = "graph.txt";
     private final static String BAR_SEPARATOR = "|";
     private final static String BAR_SEAPRATOR_SPLIT = "\\" + BAR_SEPARATOR;
     private final static String NODE_WEIGHT_SEPARATOR = ":";
-    private final static String NO_PATH = "XX";
+    private final static String PATH_START = "$";
 
     // enum for index of lists?
 
@@ -116,7 +114,7 @@ public class AssigTwoz5015906 {
                     pair._1,
                     pair._1.equals(startNode) ? "0" : "-1",
                     pair._2.toString().replaceAll("\\s", ""),
-                    NO_PATH
+                    PATH_START
             )
         );
     }
@@ -125,13 +123,17 @@ public class AssigTwoz5015906 {
 
     public static void main(String[] args) {
 
+
+        String startNode = args[0];
+        String inputPath = args[1];
+        String outputPath = args[2];
+
         logger1.setLevel(Level.OFF);
         logger2.setLevel(Level.OFF);
 
         JavaSparkContext sc = new JavaSparkContext(new SparkConf().setAppName("Ass2").setMaster("local"));
-        JavaRDD<String> input = sc.textFile(INPUT_FILE);
+        JavaRDD<String> input = sc.textFile(inputPath);
 
-        String startNode = "N0";
         JavaRDD<String> parsed = formatInput(input, startNode);
 
         JavaRDD<Node> graph = parsed.mapToPair(line -> {
@@ -154,7 +156,6 @@ public class AssigTwoz5015906 {
             // mapper (read text and convert back to key pair)
             JavaPairRDD<String, Node> mapper =
                     prevGraph
-                    // only work with nodes that have a distance (temporarily)
                     .flatMapToPair(line-> {
                         ArrayList<Tuple2<String, Node>> result = new ArrayList<>();
                         Node node = new Node(line);
@@ -164,7 +165,7 @@ public class AssigTwoz5015906 {
                             for (Tuple2<String, Integer> neighbour : node.getAdjacencyList()) {
                                 result.add(new Tuple2<>(neighbour._1,
                                         new Node(neighbour._1, distance + neighbour._2, new ArrayList<>(),
-                                                node.getBestPathToNode() + "->" + node.getNodeId())));
+                                                (node.getBestPathToNode().equals(PATH_START) ? "" : node.getBestPathToNode() + "-") + node.getNodeId())));
                             }
                         }
                         return result.iterator();
@@ -200,6 +201,32 @@ public class AssigTwoz5015906 {
 
             visited.put(index, true);
         }
+
+                sc.textFile("iteration" + index).filter(line -> {
+            String[] tokens = line.split(BAR_SEAPRATOR_SPLIT);
+            return !tokens[0].equals(startNode);
+        }).map(line ->
+            {
+                String[] tokens = line.split(BAR_SEAPRATOR_SPLIT);
+                String finishNode = tokens[0];
+                String distance = tokens[1];
+                String path = tokens[3];
+
+                return String.join(",", finishNode, distance,  path);
+            }
+        ).mapToPair(line -> {
+            String[] tokens = line.split(",");
+            Integer distance = Integer.parseInt(tokens[1]);
+            Tuple2<String, String> nodeAndPath = new Tuple2<>(tokens[0], tokens[2]);
+            return new Tuple2<>(distance, nodeAndPath);
+        }).sortByKey().map(pair -> {
+            String node = pair._2._1;
+            String path = pair._2._2;
+            Integer distance = pair._1;
+            return path.equals(PATH_START) ? String.join(",", node, distance.toString())
+                    : String.join(",", node, distance.toString(), path + "-" + node);
+        }).saveAsTextFile(outputPath);
+
 
     }
 }
