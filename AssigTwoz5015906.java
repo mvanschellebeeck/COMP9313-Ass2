@@ -16,35 +16,32 @@ public class AssigTwoz5015906 {
     final static Logger logger2 = Logger.getLogger("akka");
     final static String INPUT_FILE = "graph.txt";
     final static String BAR_SEPARATOR = "|";
+    final static String BAR_SEAPRATOR_SPLIT = "\\" + BAR_SEPARATOR;
     final static String NODE_WEIGHT_SEPARATOR = ":";
+    final static String NO_PATH="XX";
 
     public static class Node implements Serializable {
         String nodeId;
         Integer distanceToSource;
-        ArrayList<Tuple2<String,Integer>> adjacencyList;
+        ArrayList<String> adjacencyList;
         String bestPathToNode;
 
-        public ArrayList<Tuple2<String,Integer>> parseAdjacencyList(String list) {
-            ArrayList<Tuple2<String,Integer>> result = new ArrayList<>();
-           String[] cleanList = list
+        public ArrayList<String> parseAdjacencyList(String list) {
+            ArrayList<String> result = new ArrayList<>();
+            String[] cleanList = list
                     .replace("[", "")
                     .replace("]", "")
                     .split(",");
 
            for (int i = 0; i < cleanList.length; i++) {
                 String[] pairs = cleanList[i].split(NODE_WEIGHT_SEPARATOR);
-                result.add(new Tuple2<>(
-                            pairs[0],
-                            Integer.parseInt(pairs[1])
-                        )
-                );
+                result.add(pairs[0] + ":" + pairs[1]);
            }
            return result;
         }
 
         public Node(String line) {
-            String[] tokens = line.split(BAR_SEPARATOR);
-            System.out.println(tokens);
+            String[] tokens = line.split(BAR_SEAPRATOR_SPLIT);
             nodeId = tokens[0];
             distanceToSource = Integer.parseInt(tokens[1]);
             adjacencyList = parseAdjacencyList(tokens[2]);
@@ -59,7 +56,7 @@ public class AssigTwoz5015906 {
             return distanceToSource;
         }
 
-        public ArrayList<Tuple2<String, Integer>> getAdjacencyList() {
+        public ArrayList<String> getAdjacencyList() {
             return adjacencyList;
         }
 
@@ -69,12 +66,11 @@ public class AssigTwoz5015906 {
 
         @Override
         public String toString() {
-            return "Node{" +
-                    "nodeId='" + nodeId + '\'' +
-                    ", distanceToSource=" + distanceToSource +
-                    ", adjacencyList=" + adjacencyList +
-                    ", bestPathToNode='" + bestPathToNode + '\'' +
-                    '}';
+            return String.join("|",
+                    nodeId,
+                    distanceToSource.toString(),
+                    adjacencyList.toString().replaceAll("\\s", ""),
+                    NO_PATH);
         }
     }
 
@@ -100,7 +96,7 @@ public class AssigTwoz5015906 {
                     pair._1,
                     pair._1.equals(startNode) ? "0" : "-1",
                     pair._2.toString().replaceAll("\\s", ""),
-                    ""
+                    NO_PATH
             )
         );
     }
@@ -118,19 +114,30 @@ public class AssigTwoz5015906 {
         String startNode = "N0";
         JavaRDD<String> parsed = formatInput(input, startNode);
 
-        JavaPairRDD<String, String> tester = parsed.flatMapToPair(line -> {
+        JavaRDD<String> graph = parsed.map(line -> {
             Node node = new Node(line);
-            ArrayList<Tuple2<String, String>> result = new ArrayList<>();;
-            result.add(new Tuple2<>(node.getNodeId(), node.toString()));
-            return result.iterator();
+            return node.toString();
         });
 
+        graph.collect().forEach(System.out::println);
+        graph.saveAsTextFile("iteration0");
 
-        parsed.collect().forEach(System.out::println);
+        HashMap<Integer, Boolean> visited = new HashMap<>();
+        int index = 0;
 
-        HashMap<String, Boolean> visited = new HashMap<>();
-        boolean start = true;
+        while (visited.size() != 6) {
+            JavaRDD<String> prevGraph = sc.textFile("iteration" + index);
+            System.out.println("Previous iteration:");
+            prevGraph.collect().forEach(System.out::println);
 
+
+            prevGraph.mapToPair(line-> {
+                Node node = new Node(line);
+                return new Tuple2<>(node.getNodeId(), node);
+            }).collect().forEach(System.out::println);
+
+            break;
+        }
 
 
         // mapper
