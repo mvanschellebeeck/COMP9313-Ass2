@@ -21,7 +21,7 @@ public class AssigTwoz5015906 {
 
     // enum for index of lists?
 
-    public static class Node implements Serializable {
+    public static class Node implements Serializable, Comparable<Node> {
         String nodeId;
         Integer distanceFromSource;
         ArrayList<String> adjacencyList;
@@ -33,9 +33,7 @@ public class AssigTwoz5015906 {
             String[] cleanList = list
                     .replace("[", "")
                     .replace("]", "")
-                    .trim()
                     .split(",");
-
 
            for (int i = 0; i < cleanList.length; i++) {
                 String[] pairs = cleanList[i].split(NODE_WEIGHT_SEPARATOR);
@@ -89,6 +87,17 @@ public class AssigTwoz5015906 {
                     distanceFromSource.toString(),
                     adjacencyList.toString().replaceAll("\\s", ""),
                     bestPathToNode);
+        }
+
+        @Override
+        public int compareTo(Node node) {
+            if (this.distanceFromSource == -1) {
+                return 0;
+            } else if (node.distanceFromSource == -1) {
+                return 1;
+            } else {
+                return this.distanceFromSource < node.distanceFromSource ? 1 : 0;
+            }
         }
     }
 
@@ -172,28 +181,19 @@ public class AssigTwoz5015906 {
                     });
 
             mapper.reduceByKey((node, node2) ->{
+                // take adjacency list from the original file (one line of every iteration)
                 ArrayList<Tuple2<String, Integer>> neighbours = node.getAdjacencyList().isEmpty() ?
                         node2.getAdjacencyList() : node.getAdjacencyList();
 
-                Integer nodeDistance = node.getDistanceFromSource();
-                Integer node2Distance = node2.getDistanceFromSource();
                 Integer minDistance;
                 String path;
 
-               if (nodeDistance == -1)  {
-                  minDistance = node2Distance;
-                  path = node2.getBestPathToNode();
-               } else if (node2Distance == -1) {
-                   minDistance = nodeDistance;
-                   path = node.getBestPathToNode();
-               } else {
-                   if (nodeDistance < node2Distance) {
-                       minDistance = nodeDistance;
-                       path = node.getBestPathToNode();
-                   } else {
-                       minDistance = node2Distance;
-                       path = node2.getBestPathToNode();
-                   }
+               if (node.compareTo(node2) == 1) {
+                  minDistance = node.getDistanceFromSource();
+                  path = node.getBestPathToNode();
+                } else {
+                   minDistance = node2.getDistanceFromSource();
+                   path = node2.getBestPathToNode();
                }
 
                 return new Node(node.getNodeId(), minDistance, neighbours, path);
