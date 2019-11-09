@@ -19,7 +19,7 @@ public class AssigTwoz5015906 {
     private final static String BAR_SEPARATOR = "|";
     private final static String BAR_SEAPRATOR_SPLIT = "\\" + BAR_SEPARATOR;
     private final static String NODE_WEIGHT_SEPARATOR = ":";
-    private final static String NO_PATH="XX";
+    private final static String NO_PATH = "XX";
 
     // enum for index of lists?
 
@@ -31,15 +31,18 @@ public class AssigTwoz5015906 {
 
         public ArrayList<String> parseAdjacencyList(String list) {
             ArrayList<String> result = new ArrayList<>();
+            if (list.equals("[]")) return result;
             String[] cleanList = list
                     .replace("[", "")
                     .replace("]", "")
+                    .trim()
                     .split(",");
+
 
            for (int i = 0; i < cleanList.length; i++) {
                 String[] pairs = cleanList[i].split(NODE_WEIGHT_SEPARATOR);
                 result.add(pairs[0] + ":" + pairs[1]);
-           }
+            }
            return result;
         }
 
@@ -47,7 +50,10 @@ public class AssigTwoz5015906 {
              ArrayList<Tuple2<String, Integer>> adjacencyList, String path) {
             this.nodeId = nodeId;
             this.distanceFromSource = distanceFromSource;
-            this.adjacencyList = new ArrayList<>();
+            this.adjacencyList = (ArrayList<String>) adjacencyList
+                    .stream()
+                    .map(t -> String.join(":", t._1, t._2.toString()))
+                    .collect(Collectors.toList());
             this.bestPathToNode = path;
         }
 
@@ -128,10 +134,10 @@ public class AssigTwoz5015906 {
         String startNode = "N0";
         JavaRDD<String> parsed = formatInput(input, startNode);
 
-        JavaRDD<String> graph = parsed.map(line -> {
+        JavaRDD<Node> graph = parsed.mapToPair(line -> {
             Node node = new Node(line);
-            return node.toString();
-        });
+            return new Tuple2<>(node.getNodeId(), node);
+        }).values();
 
         graph.collect().forEach(System.out::println);
         graph.saveAsTextFile("iteration0");
@@ -141,23 +147,25 @@ public class AssigTwoz5015906 {
 
         while (visited.size() != 6) {
             JavaRDD<String> prevGraph = sc.textFile("iteration" + index);
+            index += 1;
             System.out.println("Previous iteration:");
             prevGraph.collect().forEach(System.out::println);
 
-            // mapper
+            // mapper (read text and convert back to key pair)
             JavaPairRDD<String, Node> mapper =
                     prevGraph
                     // only work with nodes that have a distance (temporarily)
-                    .filter(v -> Integer.parseInt(v.split(BAR_SEAPRATOR_SPLIT)[1]) >= 0)
                     .flatMapToPair(line-> {
                         ArrayList<Tuple2<String, Node>> result = new ArrayList<>();
                         Node node = new Node(line);
                         result.add(new Tuple2<>(node.getNodeId(), node));
-                        Integer distance = node.getDistanceFromSource();
-                        for(Tuple2<String, Integer> neighbour : node.getAdjacencyList()) {
-                            result.add(new Tuple2<>(neighbour._1,
-                                    new Node(neighbour._1, distance + neighbour._2, new ArrayList<>(),
-                                            node.getNodeId())));
+                        if (node.getDistanceFromSource() >= 0) {
+                            Integer distance = node.getDistanceFromSource();
+                            for (Tuple2<String, Integer> neighbour : node.getAdjacencyList()) {
+                                result.add(new Tuple2<>(neighbour._1,
+                                        new Node(neighbour._1, distance + neighbour._2, new ArrayList<>(),
+                                                node.getBestPathToNode() + "->" + node.getNodeId())));
+                            }
                         }
                         return result.iterator();
                     });
@@ -167,35 +175,31 @@ public class AssigTwoz5015906 {
                         node2.getAdjacencyList() : node.getAdjacencyList();
 
                 Integer nodeDistance = node.getDistanceFromSource();
-                Integer node2Distance = node2.distanceFromSource;
-                String path;
+                Integer node2Distance = node2.getDistanceFromSource();
                 Integer minDistance;
-                if (nodeDistance < node2Distance) {
+                String path;
+
+               if (nodeDistance == -1)  {
+                  minDistance = node2Distance;
+                  path = node2.getBestPathToNode();
+               } else if (node2Distance == -1) {
                    minDistance = nodeDistance;
                    path = node.getBestPathToNode();
-                } else {
-                   minDistance = node2Distance;
-                   path = node2.getBestPathToNode();
-                }
+               } else {
+                   if (nodeDistance < node2Distance) {
+                       minDistance = nodeDistance;
+                       path = node.getBestPathToNode();
+                   } else {
+                       minDistance = node2Distance;
+                       path = node2.getBestPathToNode();
+                   }
+               }
 
                 return new Node(node.getNodeId(), minDistance, neighbours, path);
-            }).collect().forEach(System.out::println);
+            }).values().saveAsTextFile("iteration" + (index));
 
-
-            break;
-
+            visited.put(index, true);
         }
 
-//            // reducer
-//           adjacentNodes
-//                   .reduceByKey( (best, curr) -> curr._2() < best._2() ? curr : best)
-//                   // comma separated - makes it easier to read on next iteration
-//                   .map(a -> a.toString().replace("(","").replace(")", ""))
-//                   .saveAsTextFile("wasup");
-//
-//            visited.put(startNode, true);
-//
-//            start = false;
-//        }
     }
 }
