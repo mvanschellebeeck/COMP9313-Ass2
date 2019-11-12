@@ -4,7 +4,7 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.SparkConf;
 import scala.Serializable;
 import scala.Tuple2;
-import java.util.HashMap;
+
 import java.util.ArrayList;
 import java.util.stream.Collectors;
 import org.apache.log4j.Logger;
@@ -19,6 +19,8 @@ public class AssigTwoz5015906 {
     private final static String NODE_WEIGHT_SEPARATOR = ":";
     private final static String PATH_START = "$";
     private final static String EMPTY_LIST = "[]";
+    private final static String VISITED = "V";
+    private final static String UNVISITED = "U";
 
     public static class Neighbour implements Serializable {
         String nodeId;
@@ -43,6 +45,7 @@ public class AssigTwoz5015906 {
         Integer distanceFromSource;
         ArrayList<Neighbour> adjacencyList;
         String bestPathToNode;
+        String visited;
 
         ArrayList<Neighbour> parseAdjacencyList(String list) {
             ArrayList<Neighbour> result = new ArrayList<>();
@@ -59,12 +62,13 @@ public class AssigTwoz5015906 {
             return result;
         }
 
-        Node(String _nodeId, Integer _distanceFromSource,
-             ArrayList<Neighbour> _adjacencyList, String _path) {
+        Node(String _nodeId, Integer _distanceFromSource, ArrayList<Neighbour> _adjacencyList,
+                String _path, String _visited) {
             nodeId = _nodeId;
             distanceFromSource = _distanceFromSource;
             adjacencyList = _adjacencyList;
             bestPathToNode = _path;
+            visited = _visited;
         }
 
         Node(String line) {
@@ -73,23 +77,20 @@ public class AssigTwoz5015906 {
             distanceFromSource = Integer.parseInt(tokens[1]);
             adjacencyList = parseAdjacencyList(tokens[2]);
             bestPathToNode = tokens[3];
+            visited = tokens[4];
         }
 
-        String getNodeId() {
-            return nodeId;
-        }
+        String getNodeId() { return nodeId; }
 
-        Integer getDistanceFromSource() {
-            return distanceFromSource;
-        }
+        Integer getDistanceFromSource() { return distanceFromSource; }
 
-        ArrayList<Neighbour> getAdjacencyList() {
-            return adjacencyList;
-        }
+        ArrayList<Neighbour> getAdjacencyList() { return adjacencyList; }
 
-        String getBestPathToNode() {
-            return bestPathToNode;
-        }
+        String getBestPathToNode() { return bestPathToNode; }
+
+        public String getVisited() { return visited; }
+
+        public void markAsVisited() { visited = VISITED; }
 
         @Override
         public String toString() {
@@ -101,7 +102,8 @@ public class AssigTwoz5015906 {
                 nodeId,
                 distanceFromSource.toString(),
                 parseList.toString().replaceAll("\\s", ""),
-                bestPathToNode);
+                bestPathToNode,
+                visited);
         }
 
         @Override
@@ -128,16 +130,17 @@ public class AssigTwoz5015906 {
                 pair._1,
                 pair._1.equals(startNode) ? "0" : "-1",
                 pair._2.toString().replaceAll("\\s", ""),
-                PATH_START
+                PATH_START,
+                pair._1.equals(startNode) ? VISITED : UNVISITED
             )
         );
     }
 
     private static ArrayList<Tuple2<String, Node>> processNeighbours(Node node) {
         ArrayList<Tuple2<String, Node>> result = new ArrayList<>();
-        result.add(new Tuple2<>(node.getNodeId(), node));
         Integer distance = node.getDistanceFromSource();
         if (distance > -1) {
+            node.markAsVisited();
             for (Neighbour neighbour : node.getAdjacencyList()) {
                 String bestPath = node.getBestPathToNode();
                 String newPath = bestPath.equals(PATH_START) ? "" : bestPath + "-";
@@ -145,10 +148,17 @@ public class AssigTwoz5015906 {
                 ArrayList<Neighbour> neighbours = new ArrayList<>();
                 result.add(new Tuple2<>(neighbour.getNodeId(),
                             new Node(neighbour.getNodeId(), distance + neighbour.getDistanceFromParent(),
-                            neighbours, newPath + node.getNodeId())));
+                            neighbours, newPath + node.getNodeId(), UNVISITED)));
             }
         }
+        result.add(new Tuple2<>(node.getNodeId(), node));
         return result;
+    }
+
+    private static boolean allNodesVisited(JavaRDD<Node> input) {
+        return input.map(node -> node.getVisited())
+        .filter(val -> !val.equals(VISITED))
+        .isEmpty();
     }
 
     public static void main(String[] args) {
@@ -167,9 +177,9 @@ public class AssigTwoz5015906 {
         JavaRDD<String> input = sc.textFile(inputPath);
         formatInput(input, startNode).saveAsTextFile("iteration" + iterationNo);
 
-        HashMap<Integer, Boolean> visited = new HashMap<>();
-
-        while (visited.size() != 6) {
+        boolean allVisited = false;
+        while (!allVisited) {
+            System.out.println("Iteration number " + iterationNo);
             JavaRDD<String> graph = sc.textFile("iteration" + iterationNo);
             iterationNo += 1;
 
@@ -190,13 +200,29 @@ public class AssigTwoz5015906 {
                 // select node with min distance from source
                 return node.compareTo(node2) > 0 ?
                         new Node(node.getNodeId(), node.getDistanceFromSource(), neighbours,
-                            node.getBestPathToNode())
+                                node.getBestPathToNode(), node.getVisited())
                         : new Node(node.getNodeId(), node2.getDistanceFromSource(), neighbours,
-                            node2.getBestPathToNode());
+                        node2.getBestPathToNode(), node.getVisited());
 
             }).values().saveAsTextFile("iteration" + iterationNo);
 
-            visited.put(iterationNo, true);
+            JavaRDD<Node> abc = mapper.reduceByKey((node, node2) -> {
+                // take adjacency list from the original file (one line of every iteration)
+                ArrayList<Neighbour> neighbours = node.getAdjacencyList().isEmpty() ?
+                        node2.getAdjacencyList() : node.getAdjacencyList();
+
+                String isVisited = node.getVisited().equals(VISITED) ? VISITED : node2.getVisited();
+
+                // select node with min distance from source
+                return node.compareTo(node2) > 0 ?
+                        new Node(node.getNodeId(), node.getDistanceFromSource(), neighbours,
+                            node.getBestPathToNode(), isVisited)
+                        : new Node(node.getNodeId(), node2.getDistanceFromSource(), neighbours,
+                            node2.getBestPathToNode(), isVisited);
+
+            }).values();
+
+            allVisited = allNodesVisited(abc);
         }
 
         // take last iteration, sort by distance, complete path (by appending final node)
