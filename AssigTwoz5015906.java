@@ -7,6 +7,7 @@ import scala.Tuple2;
 
 import java.util.ArrayList;
 import java.util.stream.Collectors;
+import java.util.Comparator;
 import org.apache.log4j.Logger;
 import org.apache.log4j.Level;
 
@@ -40,6 +41,16 @@ public class AssigTwoz5015906 {
         }
     }
 
+    static class NodeComparator implements Comparator<Integer>, Serializable {
+    // only useful to ensure -1s are at the end of the list
+    @Override
+    public int compare(Integer t1, Integer t2) {
+        if (t1 == -1 || t2 == -1) {
+            return t1 == -1 ? 1 : -1;
+        }
+        return  t1 < t2 ? -1 : 1;
+    }
+}
     public static class Node implements Serializable, Comparable<Node> {
         String nodeId;
         Integer distanceFromSource;
@@ -155,10 +166,16 @@ public class AssigTwoz5015906 {
         return result;
     }
 
+    private static long discoveredVertexCount(JavaRDD<Node> input) {
+        return input.map(node -> node.getVisited())
+                .filter(val -> val.equals(VISITED))
+                .count();
+    }
+
     private static boolean allNodesVisited(JavaRDD<Node> input) {
         return input.map(node -> node.getVisited())
-        .filter(val -> !val.equals(VISITED))
-        .isEmpty();
+                .filter(val -> val.equals(UNVISITED))
+                .isEmpty();
     }
 
     public static void main(String[] args) {
@@ -167,8 +184,8 @@ public class AssigTwoz5015906 {
         String inputPath = args[1];
         String outputPath = args[2];
 
-        logger1.setLevel(Level.OFF);
-        logger2.setLevel(Level.OFF);
+//        logger1.setLevel(Level.OFF);
+//        logger2.setLevel(Level.OFF);
 
         JavaSparkContext sc = new JavaSparkContext(new SparkConf().setAppName("Ass2").setMaster("local"));
         int iterationNo = 0;
@@ -178,35 +195,23 @@ public class AssigTwoz5015906 {
         formatInput(input, startNode).saveAsTextFile("iteration" + iterationNo);
 
         boolean allVisited = false;
+        long prevDiscoveredVertices = 0;
+
         while (!allVisited) {
-            System.out.println("Iteration number " + iterationNo);
-            JavaRDD<String> graph = sc.textFile("iteration" + iterationNo);
+//            System.out.println("Iteration number " + iterationNo);
+            JavaRDD<String> vertices = sc.textFile("iteration" + iterationNo);
             iterationNo += 1;
 
             // mapper (read text and convert back to key pair)
             JavaPairRDD<String, Node> mapper =
-                graph.flatMapToPair(line -> {
+                vertices.flatMapToPair(line -> {
                     Node node = new Node(line);
                     ArrayList<Tuple2<String, Node>> valuesToBeEmitted = processNeighbours(node);
                     return valuesToBeEmitted.iterator();
                 });
 
             // reducer (group by keys and take best path/min dist)
-            mapper.reduceByKey((node, node2) -> {
-                // take adjacency list from the original file (one line of every iteration)
-                ArrayList<Neighbour> neighbours = node.getAdjacencyList().isEmpty() ?
-                        node2.getAdjacencyList() : node.getAdjacencyList();
-
-                // select node with min distance from source
-                return node.compareTo(node2) > 0 ?
-                        new Node(node.getNodeId(), node.getDistanceFromSource(), neighbours,
-                                node.getBestPathToNode(), node.getVisited())
-                        : new Node(node.getNodeId(), node2.getDistanceFromSource(), neighbours,
-                        node2.getBestPathToNode(), node.getVisited());
-
-            }).values().saveAsTextFile("iteration" + iterationNo);
-
-            JavaRDD<Node> abc = mapper.reduceByKey((node, node2) -> {
+            JavaRDD<Node> newVertices = mapper.reduceByKey((node, node2) -> {
                 // take adjacency list from the original file (one line of every iteration)
                 ArrayList<Neighbour> neighbours = node.getAdjacencyList().isEmpty() ?
                         node2.getAdjacencyList() : node.getAdjacencyList();
@@ -222,7 +227,15 @@ public class AssigTwoz5015906 {
 
             }).values();
 
-            allVisited = allNodesVisited(abc);
+            newVertices.saveAsTextFile("iteration" + iterationNo);
+            allVisited = allNodesVisited(newVertices);
+
+            long discoveredVertices = discoveredVertexCount(newVertices);
+            if (prevDiscoveredVertices == discoveredVertices) {
+                break;
+            } else {
+               prevDiscoveredVertices =  discoveredVertices;
+            }
         }
 
         // take last iteration, sort by distance, complete path (by appending final node)
@@ -233,12 +246,12 @@ public class AssigTwoz5015906 {
             Node node = new Node(line);
             Tuple2<String, String> nodeAndPath = new Tuple2<>(node.getNodeId(), node.getBestPathToNode());
             return new Tuple2<>(node.getDistanceFromSource(), nodeAndPath);
-        }).sortByKey().map(pair -> {
+        }).sortByKey(new NodeComparator()).map(pair -> {
             String node = pair._2._1;
             String path = pair._2._2;
             String distance = pair._1.toString();
             return path.equals(PATH_START) ?
-                    String.join(",", node, distance)
+                    String.join(",", node, distance) + ","
                     : String.join(",", node, distance, path + "-" + node);
         }).saveAsTextFile(outputPath);
     }
