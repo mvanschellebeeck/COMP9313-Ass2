@@ -1,21 +1,50 @@
-import org.apache.spark.api.java.JavaPairRDD;
-import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.api.java.JavaRDD;
+import org.apache.commons.io.FileUtils;
 import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
 import scala.Serializable;
 import scala.Tuple2;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.stream.Collectors;
 import java.util.Comparator;
-import org.apache.log4j.Logger;
-import org.apache.log4j.Level;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+
+/*
+*   First, format the input into a vertex-adjacency list representation. This is identical to the final reduced form
+*   at the end of each iteration. This representation will show distance from source, adjacency list, path to source,
+*   and visited status. For example, after the first iteration:
+*
+*   Node | Distance | Adj List          | Path | Visited
+*   N0     0          [N1:4,N2:3]         $      V
+*   N1     -1         [N2:2,N3:2]         $      U
+*   N3     -1         [N4:2]              $      U
+*   N4     -1         [N0:4,N1:4,N5:6]    $      U
+*   N2     -1         [N3:7]              $      U
+*
+*  A distance of -1 denotes that the node has no path to source has been discovered yet. $ denotes an empty path and
+*  V/U denotes VISITED/UNVISITED.
+*
+*   At each iteration the mapper looks at each vertex and calculates distances to all of the vertices in the adj list.
+*   It will emit every single vertex/neighbour path for the reducer to work on.
+*   i.e. Node N0 will emit 2 values, a path to N1 and a path to N2.
+*
+*   The reducer will then take each node and reduce by the minimum distance. It is also used to pass adjacency lists
+*   (through one emitted vertex) onto the next iteration and determine the best paths based on the emitted value with
+*   min distance. At each iteration the Visited values are reduced to check if all have been visited or the amount
+*   visited in the previous iteration is the same in this iteration (meaning no more nodes can be discovered). Once
+*   this termination condition is reached it will sort by min distance (with a special NodeComparator to handle the odd
+*   -1 distance case).
+*
+* */
 
 
 public class AssigTwoz5015906 {
 
-    private final static Logger logger1 = Logger.getLogger("org");
-    private final static Logger logger2 = Logger.getLogger("akka");
     private final static String FIELD_SEPARATOR = " ";
     private final static String NODE_WEIGHT_SEPARATOR = ":";
     private final static String PATH_START = "$";
@@ -178,14 +207,23 @@ public class AssigTwoz5015906 {
                 .isEmpty();
     }
 
+    private static void cleanUp(int iterations) {
+        // remove all intermediate iteration files
+        IntStream.range(0, iterations + 1)
+            .forEach(i -> {
+                try {
+                    FileUtils.deleteDirectory(new File("iteration" + i));
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
+    }
+
     public static void main(String[] args) {
 
         String startNode = args[0];
         String inputPath = args[1];
         String outputPath = args[2];
-
-//        logger1.setLevel(Level.OFF);
-//        logger2.setLevel(Level.OFF);
 
         JavaSparkContext sc = new JavaSparkContext(new SparkConf().setAppName("Ass2").setMaster("local"));
         int iterationNo = 0;
@@ -198,7 +236,6 @@ public class AssigTwoz5015906 {
         long prevDiscoveredVertices = 0;
 
         while (!allVisited) {
-//            System.out.println("Iteration number " + iterationNo);
             JavaRDD<String> vertices = sc.textFile("iteration" + iterationNo);
             iterationNo += 1;
 
@@ -254,5 +291,8 @@ public class AssigTwoz5015906 {
                     String.join(",", node, distance) + ","
                     : String.join(",", node, distance, path + "-" + node);
         }).saveAsTextFile(outputPath);
+
+        cleanUp(iterationNo);
+
     }
 }
